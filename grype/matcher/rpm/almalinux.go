@@ -50,7 +50,7 @@ func markAsIndirectMatches(results result.Set) result.Set {
 // 2. Search for RHEL disclosures for all upstream (source) packages
 // 3. Search for AlmaLinux unaffected records for the binary package and related packages
 // 4. Apply filtering logic to determine which disclosures are still vulnerable on AlmaLinux
-func almaLinuxMatchesWithUpstreams(provider result.Provider, binaryPkg pkg.Package) ([]match.Match, []match.IgnoreFilter, error) {
+func almaLinuxMatchesWithUpstreams(provider result.Provider, binaryPkg pkg.Package, comparisonConfig version.ComparisonConfig) ([]match.Match, []match.IgnoreFilter, error) {
 	if strings.HasSuffix(binaryPkg.Name, "-debuginfo") || strings.HasSuffix(binaryPkg.Name, "-debugsource") {
 		return nil, nil, nil // almalinux explicitly never publishes advisories for RPMs that are only debug material
 	}
@@ -61,7 +61,7 @@ func almaLinuxMatchesWithUpstreams(provider result.Provider, binaryPkg pkg.Packa
 	rhelCompatibleDistro := *binaryPkg.Distro
 	rhelCompatibleDistro.Type = distro.RedHat // treat as RHEL for disclosure lookup
 
-	pkgVersion := version.New(binaryPkg.Version, pkg.VersionFormat(binaryPkg))
+	pkgVersion := version.NewWithConfig(binaryPkg.Version, pkg.VersionFormat(binaryPkg), comparisonConfig)
 
 	// Step 1: Find RHEL disclosures for the binary package (direct match)
 	all, err := provider.FindResults(
@@ -84,7 +84,7 @@ func almaLinuxMatchesWithUpstreams(provider result.Provider, binaryPkg pkg.Packa
 	for _, upstreamPkg := range pkg.UpstreamPackages(binaryPkg) {
 		// Create a version object from the upstream package WITHOUT adding epoch
 		// This avoids false positives where binary package epochs differ from source package epochs
-		upstreamVersion := version.New(upstreamPkg.Version, pkg.VersionFormat(upstreamPkg))
+		upstreamVersion := version.NewWithConfig(upstreamPkg.Version, pkg.VersionFormat(upstreamPkg), comparisonConfig)
 
 		all, err = provider.FindResults(
 			search.ByPackageName(upstreamPkg.Name),

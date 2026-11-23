@@ -22,8 +22,8 @@ var ErrEmptyCPEMatch = errors.New("attempted CPE match against package with no C
 // MatchPackageByCPEs retrieves all vulnerabilities that match any of the provided package's CPEs,
 // returned as a flat slice of matches. It is a thin wrapper over FindResultsByCPEs for callers that
 // work in []match.Match rather than result.Set.
-func MatchPackageByCPEs(vulnProvider vulnerability.Provider, p pkg.Package, upstreamMatcher match.MatcherType) ([]match.Match, []match.IgnoreFilter, error) {
-	results, ignore, err := FindResultsByCPEs(vulnProvider, p, upstreamMatcher)
+func MatchPackageByCPEs(vulnProvider vulnerability.Provider, p pkg.Package, upstreamMatcher match.MatcherType, pkgVersion ...*version.Version) ([]match.Match, []match.IgnoreFilter, error) {
+	results, ignore, err := FindResultsByCPEs(vulnProvider, p, upstreamMatcher, pkgVersion...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -35,15 +35,26 @@ func MatchPackageByCPEs(vulnProvider vulnerability.Provider, p pkg.Package, upst
 // result.Set, so callers can reconcile them against other sources by vulnerability identity. Records
 // the CPE search finds but whose version is not affected are returned as "CPE not vulnerable" ignores.
 //
+// An optional package version supplies the comparison policy for the CPE-derived versions. This keeps
+// CPE matching aligned with the distro/name path (for example, missing-epoch handling) without making
+// comparison config a global setting for every package type. When omitted, the format's native
+// comparison behavior is used.
+//
 //nolint:funlen
-func FindResultsByCPEs(vulnProvider vulnerability.Provider, p pkg.Package, upstreamMatcher match.MatcherType) (result.Set, []match.IgnoreFilter, error) {
-	provider := result.NewProvider(vulnProvider, p, upstreamMatcher)
+func FindResultsByCPEs(vulnProvider vulnerability.Provider, p pkg.Package, upstreamMatcher match.MatcherType, pkgVersion ...*version.Version) (result.Set, []match.IgnoreFilter, error) {
+	provider := result.NewProvider(vulnProvider, p, upstreamMatcher, pkgVersion...)
 
 	affected := result.Set{}
 	var ignores []match.IgnoreFilter
 	// Warn the user if they are matching by CPE, but there are no CPEs available.
 	if len(p.CPEs) == 0 {
 		return nil, nil, ErrEmptyCPEMatch
+	}
+
+	format := pkg.VersionFormat(p)
+	baseVersion := version.NewWithConfig(p.Version, format, version.ComparisonConfig{})
+	if len(pkgVersion) > 0 && pkgVersion[0] != nil {
+		baseVersion = pkgVersion[0]
 	}
 
 	for _, c := range p.CPEs {
@@ -67,16 +78,13 @@ func FindResultsByCPEs(vulnProvider vulnerability.Provider, p pkg.Package, upstr
 		// may alter the version based on above processing)
 		c.Attributes.Version = searchVersion
 
-		format := pkg.VersionFormat(p)
-
 		if format == version.JVMFormat {
 			searchVersion = cpeversion.JVM(searchVersion, c.Attributes.Update)
 		}
 
 		var verObj *version.Version
-		var err error
 		if searchVersion != "" {
-			verObj = version.New(searchVersion, format)
+			verObj = baseVersion.WithRaw(searchVersion)
 		}
 
 		criteria := []vulnerability.Criteria{

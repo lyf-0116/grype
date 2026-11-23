@@ -32,6 +32,14 @@ func NewWithConfig(raw string, format Format, cfg ComparisonConfig) *Version {
 	}
 }
 
+// WithRaw returns a version for raw using this version's format and comparison
+// configuration. This is useful when a search derives a comparable version from
+// another source (for example, a CPE version) but must retain the comparison
+// policy chosen for the package.
+func (v Version) WithRaw(raw string) *Version {
+	return NewWithConfig(raw, v.Format, v.Config)
+}
+
 func (v *Version) Validate() error {
 	_, err := v.getComparator(v.Format)
 	return err

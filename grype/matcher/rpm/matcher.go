@@ -103,7 +103,7 @@ func (m *Matcher) Match(vp vulnerability.Provider, p pkg.Package) ([]match.Match
 	}
 
 	if searchByCPE {
-		cpeMatches, ignores, err := internal.MatchPackageByCPEs(vp, p, m.Type())
+		cpeMatches, ignores, err := internal.MatchPackageByCPEs(vp, p, m.Type(), m.versionFor(p))
 		switch {
 		case errors.Is(err, internal.ErrEmptyCPEMatch):
 			log.WithFields("package", p.Name).Debug("package has no CPEs to match by")
@@ -138,7 +138,11 @@ func (m *Matcher) matchAlmaLinux(vp vulnerability.Provider, p pkg.Package) ([]ma
 	addEpochIfApplicable(&binaryPkg)
 
 	// Call almaLinuxMatches with both the binary package and its upstreams
-	return almaLinuxMatchesWithUpstreams(provider, binaryPkg)
+	return almaLinuxMatchesWithUpstreams(
+		provider,
+		binaryPkg,
+		version.ComparisonConfig{MissingEpochStrategy: m.cfg.MissingEpochStrategy},
+	)
 }
 
 // matchPackage matches the given package against the vulnerability provider (direct match).
@@ -254,14 +258,7 @@ func (m *Matcher) findMatches(provider result.Provider, searchPkg pkg.Package) (
 }
 
 func (m *Matcher) standardMatches(provider result.Provider, searchPkg pkg.Package) ([]match.Match, []match.IgnoreFilter, error) {
-	// Create version with config embedded
-	pkgVersion := version.NewWithConfig(
-		searchPkg.Version,
-		pkg.VersionFormat(searchPkg),
-		version.ComparisonConfig{
-			MissingEpochStrategy: m.cfg.MissingEpochStrategy,
-		},
-	)
+	pkgVersion := m.versionFor(searchPkg)
 
 	disclosureCriteria := []vulnerability.Criteria{
 		search.ByPackageName(searchPkg.Name),
@@ -293,6 +290,14 @@ func (m *Matcher) standardMatches(provider result.Provider, searchPkg pkg.Packag
 	unaffected = unaffected.Merge(all.Remove(disclosures))
 
 	return disclosures.ToMatches(), internal.OwnershipIgnores(searchPkg, IgnoreReasonDistroNotVulnerable, unaffected.Vulnerabilities()...), nil
+}
+
+func (m *Matcher) versionFor(p pkg.Package) *version.Version {
+	return version.NewWithConfig(
+		p.Version,
+		pkg.VersionFormat(p),
+		version.ComparisonConfig{MissingEpochStrategy: m.cfg.MissingEpochStrategy},
+	)
 }
 
 func addEpochIfApplicable(p *pkg.Package) {

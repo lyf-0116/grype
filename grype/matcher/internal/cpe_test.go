@@ -1020,6 +1020,55 @@ func TestFindMatchesByPackageCPE(t *testing.T) {
 	}
 }
 
+func TestMatchPackageByCPEs_HonorsVersionComparisonConfig(t *testing.T) {
+	const (
+		pkgName    = "widget"
+		pkgVersion = "1.0-1"
+		pkgCPE     = "cpe:2.3:a:acme:widget:1.0-1:*:*:*:*:*:*:*"
+	)
+
+	provider := mock.VulnerabilityProvider([]vulnerability.Vulnerability{
+		{
+			Reference: vulnerability.Reference{
+				ID:        "CVE-2026-10001",
+				Namespace: "nvd:cpe",
+			},
+			PackageName: pkgName,
+			Constraint:  version.MustGetConstraint("< 1:1.0-1", version.RpmFormat),
+			CPEs:        []cpe.CPE{cpe.Must("cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*", "")},
+		},
+	}...)
+
+	p := pkg.Package{
+		Name:    pkgName,
+		Version: pkgVersion,
+		Type:    syftPkg.RpmPkg,
+		CPEs:    []cpe.CPE{cpe.Must(pkgCPE, "")},
+	}
+
+	tests := []struct {
+		strategy      version.MissingEpochStrategy
+		expectMatches bool
+	}{
+		{strategy: version.MissingEpochStrategyZero, expectMatches: true},
+		{strategy: version.MissingEpochStrategyAuto, expectMatches: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.strategy), func(t *testing.T) {
+			pkgVersion := version.NewWithConfig(
+				p.Version,
+				version.RpmFormat,
+				version.ComparisonConfig{MissingEpochStrategy: tt.strategy},
+			)
+
+			matches, _, err := MatchPackageByCPEs(provider, p, match.RpmMatcher, pkgVersion)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectMatches, len(matches) > 0)
+		})
+	}
+}
+
 // TestMatchPackageByCPEs_multipleRecordsPerCVE covers folding the several database records NVD stores
 // for one CVE -- one per vulnerable CPE -- into a single finding.
 //

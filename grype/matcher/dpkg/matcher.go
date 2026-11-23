@@ -78,7 +78,7 @@ func (m *Matcher) Match(store vulnerability.Provider, p pkg.Package) ([]match.Ma
 	}
 
 	if searchByCPE {
-		cpeMatches, ignored, err := internal.MatchPackageByCPEs(store, p, m.Type())
+		cpeMatches, ignored, err := internal.MatchPackageByCPEs(store, p, m.Type(), m.versionFor(p))
 		switch {
 		case errors.Is(err, internal.ErrEmptyCPEMatch):
 			log.WithFields("package", p.Name).Debug("package has no CPEs to match by")
@@ -91,6 +91,14 @@ func (m *Matcher) Match(store vulnerability.Provider, p pkg.Package) ([]match.Ma
 	}
 
 	return matches, ignores, nil
+}
+
+func (m *Matcher) versionFor(p pkg.Package) *version.Version {
+	return version.NewWithConfig(
+		p.Version,
+		pkg.VersionFormat(p),
+		version.ComparisonConfig{MissingEpochStrategy: m.cfg.MissingEpochStrategy},
+	)
 }
 
 // matchUbuntuESM matches an Ubuntu Pro/ESM package using the two-pass disclosure/resolution search, covering both

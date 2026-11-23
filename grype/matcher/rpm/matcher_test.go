@@ -8,8 +8,12 @@ import (
 	"github.com/anchore/grype/grype/distro"
 	"github.com/anchore/grype/grype/match"
 	"github.com/anchore/grype/grype/pkg"
+	"github.com/anchore/grype/grype/version"
+	"github.com/anchore/grype/grype/vulnerability"
+	"github.com/anchore/grype/grype/vulnerability/mock"
 	"github.com/anchore/grype/internal/dbtest"
 	"github.com/anchore/syft/syft/artifact"
+	"github.com/anchore/syft/syft/cpe"
 	syftPkg "github.com/anchore/syft/syft/pkg"
 )
 
@@ -448,6 +452,59 @@ func TestMatcherRpm_CPEFallbackWhenEOL_EOLDistroEnabled(t *testing.T) {
 			SelectDetailByDistro("redhat", "7").
 			HasMatchType(match.ExactDirectMatch)
 	})
+}
+
+func TestMatcherRpm_CPEHonorsMissingEpochStrategy(t *testing.T) {
+	const (
+		pkgName    = "widget"
+		pkgVersion = "1.0-1"
+	)
+
+	provider := mock.VulnerabilityProvider([]vulnerability.Vulnerability{
+		{
+			Reference: vulnerability.Reference{
+				ID:        "CVE-2026-10001",
+				Namespace: "nvd:cpe",
+			},
+			PackageName: pkgName,
+			Constraint:  version.MustGetConstraint("< 1:1.0-1", version.RpmFormat),
+			CPEs:        []cpe.CPE{cpe.Must("cpe:2.3:a:acme:widget:*:*:*:*:*:*:*:*", "")},
+		},
+	}...)
+
+	p := pkg.Package{
+		Name:    pkgName,
+		Version: pkgVersion,
+		Type:    syftPkg.RpmPkg,
+		Distro:  dbtest.RHEL8,
+		CPEs:    []cpe.CPE{cpe.Must("cpe:2.3:a:acme:widget:1.0-1:*:*:*:*:*:*:*", "")},
+	}
+
+	tests := []struct {
+		strategy      version.MissingEpochStrategy
+		expectMatches bool
+	}{
+		{strategy: version.MissingEpochStrategyZero, expectMatches: true},
+		{strategy: version.MissingEpochStrategyAuto, expectMatches: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.strategy), func(t *testing.T) {
+			matcher := NewRpmMatcher(MatcherConfig{
+				MissingEpochStrategy: tt.strategy,
+				UseCPEs:              true,
+			})
+
+			matches, _, err := matcher.Match(provider, p)
+			assert.NoError(t, err)
+			if tt.expectMatches {
+				assert.Len(t, matches, 1)
+				assert.Equal(t, match.CPEMatch, matches[0].Details[0].Type)
+			} else {
+				assert.Empty(t, matches)
+			}
+		})
+	}
 }
 
 // TestMatcherRpm_CPEFallbackWhenEOL_EOLDistroDisabled verifies the same EOL

@@ -22,16 +22,23 @@ type Provider interface {
 }
 
 type provider struct {
-	vulnProvider vulnerability.Provider
-	catalogedPkg pkg.Package // this is what is passed into the matcher
-	matcher      match.MatcherType
+	vulnProvider     vulnerability.Provider
+	catalogedPkg     pkg.Package // this is what is passed into the matcher
+	matcher          match.MatcherType
+	comparisonConfig version.ComparisonConfig
 }
 
-func NewProvider(vp vulnerability.Provider, catalogedPkg pkg.Package, matcher match.MatcherType) Provider {
+func NewProvider(vp vulnerability.Provider, catalogedPkg pkg.Package, matcher match.MatcherType, versionSeed ...*version.Version) Provider {
+	var cfg version.ComparisonConfig
+	if len(versionSeed) > 0 && versionSeed[0] != nil {
+		cfg = versionSeed[0].Config
+	}
+
 	return provider{
-		vulnProvider: vp,
-		catalogedPkg: catalogedPkg,
-		matcher:      matcher,
+		vulnProvider:     vp,
+		catalogedPkg:     catalogedPkg,
+		matcher:          matcher,
+		comparisonConfig: cfg,
 	}
 }
 
@@ -52,7 +59,7 @@ func (p provider) FindResults(criteria ...vulnerability.Criteria) (Set, error) {
 			newResult := Result{
 				ID:              v.ID,
 				Vulnerabilities: []vulnerability.Vulnerability{v},
-				Details:         detailProvider(p.matcher, p.catalogedPkg, criteria, v),
+				Details:         detailProvider(p.matcher, p.catalogedPkg, p.comparisonConfig, criteria, v),
 				Package:         &p.catalogedPkg,
 			}
 
@@ -62,7 +69,7 @@ func (p provider) FindResults(criteria ...vulnerability.Criteria) (Set, error) {
 	return results, nil
 }
 
-func detailProvider(matcher match.MatcherType, catalogedPkg pkg.Package, criteriaSet []vulnerability.Criteria, vuln vulnerability.Vulnerability) match.Details {
+func detailProvider(matcher match.MatcherType, catalogedPkg pkg.Package, comparisonConfig version.ComparisonConfig, criteriaSet []vulnerability.Criteria, vuln vulnerability.Vulnerability) match.Details {
 	cpeParams, distroParams, ecosystemParams, pkgParams := extractSearchParameters(criteriaSet, vuln, catalogedPkg)
 	distroMatchType := determineMatchType(catalogedPkg, pkgParams)
 	applyPackageParamsToSearchParams(pkgParams, &cpeParams, &distroParams, &ecosystemParams)
@@ -71,7 +78,7 @@ func detailProvider(matcher match.MatcherType, catalogedPkg pkg.Package, criteri
 	// module-granularity Go matches where no specific symbol intersection decided the match.
 	matchedSymbols := gosymbols.MatchedSymbols(vuln.PackageQualifiers, catalogedPkg)
 	// the vulnerability's CPEs relevant at the searched version, surfaced on the CPE match detail
-	foundCPEs := matchedCPEsForSearch(catalogedPkg, searchedCPE(criteriaSet), vuln)
+	foundCPEs := matchedCPEsForSearch(catalogedPkg, comparisonConfig, criteriaSet, vuln)
 
 	return buildMatchDetails(matcher, distroMatchType, constraintStr, vuln, cpeParams, distroParams, ecosystemParams, matchedSymbols, foundCPEs)
 }
@@ -250,12 +257,13 @@ func searchedCPE(criteriaSet []vulnerability.Criteria) *cpe.CPE {
 // dropped, for one -- and a CPE the search already matched must not then be filtered back out by a
 // version its ecosystem happens to spell differently. Without a CPE search there is no searched
 // version, and the result is unused anyway: only CPE details carry found CPEs.
-func matchedCPEsForSearch(catalogedPkg pkg.Package, searchedBy *cpe.CPE, vuln vulnerability.Vulnerability) []cpe.CPE {
+func matchedCPEsForSearch(catalogedPkg pkg.Package, fallbackConfig version.ComparisonConfig, criteriaSet []vulnerability.Criteria, vuln vulnerability.Vulnerability) []cpe.CPE {
 	if len(vuln.CPEs) == 0 {
 		return nil
 	}
 
 	format := pkg.VersionFormat(catalogedPkg)
+	searchedBy := searchedCPE(criteriaSet)
 
 	searchVersion := catalogedPkg.Version
 	var searchUpdate string
@@ -271,7 +279,11 @@ func matchedCPEsForSearch(catalogedPkg pkg.Package, searchedBy *cpe.CPE, vuln vu
 		return vuln.CPEs
 	}
 
-	pkgVersion := version.New(comparableCPEVersion(searchVersion, searchUpdate, format), format)
+	pkgVersion := version.NewWithConfig(
+		comparableCPEVersion(searchVersion, searchUpdate, format),
+		format,
+		comparisonConfigForSearch(criteriaSet, fallbackConfig),
+	)
 	matchedCPEs := make([]cpe.CPE, 0, len(vuln.CPEs))
 	for _, c := range vuln.CPEs {
 		if c.Attributes.Version == wfn.Any || c.Attributes.Version == wfn.NA {
@@ -295,6 +307,15 @@ func matchedCPEsForSearch(catalogedPkg pkg.Package, searchedBy *cpe.CPE, vuln vu
 	}
 
 	return matchedCPEs
+}
+
+func comparisonConfigForSearch(criteriaSet []vulnerability.Criteria, fallback version.ComparisonConfig) version.ComparisonConfig {
+	for i := range criteriaSet {
+		if c, ok := criteriaSet[i].(*search.VersionCriteria); ok {
+			return c.Version.Config
+		}
+	}
+	return fallback
 }
 
 // comparableCPEVersion renders a CPE's version and update fields as one version string the given

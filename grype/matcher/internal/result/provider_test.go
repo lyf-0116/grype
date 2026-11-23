@@ -9,6 +9,7 @@ import (
 	"github.com/anchore/grype/grype/match"
 	"github.com/anchore/grype/grype/pkg"
 	"github.com/anchore/grype/grype/search"
+	"github.com/anchore/grype/grype/version"
 	"github.com/anchore/grype/grype/vulnerability"
 	"github.com/anchore/syft/syft/cpe"
 	syftPkg "github.com/anchore/syft/syft/pkg"
@@ -120,14 +121,14 @@ func TestMatchedCPEsForSearch(t *testing.T) {
 			catalogedPkg := pkg.Package{Version: test.version, Type: test.pkgType, Metadata: test.pkgMetadata}
 			vuln := vulnerability.Vulnerability{CPEs: vulnerabilityCPEs}
 
-			var searchedBy *cpe.CPE
+			var criteria []vulnerability.Criteria
 			if test.searchedCPE != "" {
 				c := cpe.Must(test.searchedCPE, "")
-				searchedBy = &c
+				criteria = append(criteria, search.ByCPE(c))
 			}
 
 			// run the test subject...
-			actual := matchedCPEsForSearch(catalogedPkg, searchedBy, vuln)
+			actual := matchedCPEsForSearch(catalogedPkg, version.ComparisonConfig{}, criteria, vuln)
 
 			// format CPE objects to string...
 			actualStrs := make([]string, len(actual))
@@ -203,7 +204,7 @@ func TestDetailProvider_CPEDetail(t *testing.T) {
 			}
 			criteria := []vulnerability.Criteria{search.ByCPE(cpe.Must(tt.searchedCPE, cpe.DeclaredSource))}
 
-			details := detailProvider(match.StockMatcher, catalogedPkg, criteria, vuln)
+			details := detailProvider(match.StockMatcher, catalogedPkg, version.ComparisonConfig{}, criteria, vuln)
 
 			require.Len(t, details, 1)
 			assert.Equal(t, match.CPEMatch, details[0].Type)
